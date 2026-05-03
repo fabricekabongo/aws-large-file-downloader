@@ -33,6 +33,9 @@ func NewRootCommand(ctx context.Context) *cobra.Command {
 		},
 	}
 	root.AddCommand(runCmd)
+
+	root.AddCommand(defaultDownloadCommand(ctx))
+
 	return root
 }
 

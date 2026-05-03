@@ -45,14 +45,25 @@ func (s Service) DownloadToFile(ctx context.Context, source, destination string)
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
 	}
-	f, err := os.Create(destination)
-	if err != nil {
-		return fmt.Errorf("create destination file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
 
-	if err := s.client.Download(ctx, bucket, key, f); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(destination), ".download-*")
+	if err != nil {
+		return fmt.Errorf("create temp destination file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+	}()
+
+	if err := s.client.Download(ctx, bucket, key, tmp); err != nil {
 		return fmt.Errorf("download from s3: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp destination file: %w", err)
+	}
+	if err := os.Rename(tmpName, destination); err != nil {
+		return fmt.Errorf("move temp file to destination: %w", err)
 	}
 	return nil
 }

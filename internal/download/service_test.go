@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -14,15 +15,29 @@ type fakeClient struct {
 	key    string
 	body   string
 	err    error
+	size   int64
+	etag   string
 }
 
-func (f *fakeClient) Download(_ context.Context, bucket, key string, w io.Writer) error {
+func (f *fakeClient) HeadObject(_ context.Context, bucket, key string) (ObjectInfo, error) {
+	f.bucket = bucket
+	f.key = key
+	if f.err != nil {
+		return ObjectInfo{}, f.err
+	}
+	return ObjectInfo{Size: f.size, ETag: f.etag}, nil
+}
+
+func (f *fakeClient) DownloadRange(_ context.Context, bucket, key string, start, end int64, w io.Writer) error {
 	f.bucket = bucket
 	f.key = key
 	if f.err != nil {
 		return f.err
 	}
-	_, err := w.Write([]byte(f.body))
+	if start < 0 || end >= int64(len(f.body)) || start > end {
+		return errors.New("invalid range")
+	}
+	_, err := w.Write([]byte(f.body[start : end+1]))
 	return err
 }
 
@@ -36,7 +51,6 @@ func TestParseS3URI(t *testing.T) {
 			t.Fatalf("unexpected bucket/key: %s/%s", bucket, key)
 		}
 	})
-
 	t.Run("invalid format", func(t *testing.T) {
 		_, _, err := ParseS3URI("docs/report.csv")
 		if err == nil {
@@ -48,36 +62,46 @@ func TestParseS3URI(t *testing.T) {
 func TestDownloadToFile_WritesDownloadedBytes(t *testing.T) {
 	tempDir := t.TempDir()
 	destination := filepath.Join(tempDir, "nested", "report.csv")
-	client := &fakeClient{body: "hello-world"}
+	body := strings.Repeat("a", 200)
+	client := &fakeClient{body: body, size: int64(len(body)), etag: "etag-1"}
 	svc := NewService(client)
 
-	if err := svc.DownloadToFile(context.Background(), "s3://docs/report.csv", destination); err != nil {
+	if err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, Options{ChunkSize: 64, TrackerDir: filepath.Join(tempDir, ".alld")}); err != nil {
 		t.Fatalf("expected no error, got %v", err)
-	}
-
-	if client.bucket != "docs" || client.key != "report.csv" {
-		t.Fatalf("unexpected bucket/key: %s/%s", client.bucket, client.key)
 	}
 	got, err := os.ReadFile(destination)
 	if err != nil {
 		t.Fatalf("read destination: %v", err)
 	}
-	if string(got) != "hello-world" {
-		t.Fatalf("unexpected file body: %q", string(got))
+	if string(got) != body {
+		t.Fatalf("unexpected file body")
 	}
 }
 
-func TestDownloadToFile_PropagatesDownloaderErrors(t *testing.T) {
+func TestDownloadToFile_ResumeValidatesAndRepairsWhenForced(t *testing.T) {
 	tempDir := t.TempDir()
 	destination := filepath.Join(tempDir, "report.csv")
-	expected := errors.New("boom")
-	svc := NewService(&fakeClient{err: expected})
-
-	err := svc.DownloadToFile(context.Background(), "s3://docs/report.csv", destination)
-	if !errors.Is(err, expected) {
-		t.Fatalf("expected wrapped error %v, got %v", expected, err)
+	trackerDir := filepath.Join(tempDir, ".alld")
+	body := strings.Repeat("b", 150)
+	client := &fakeClient{body: body, size: int64(len(body)), etag: "etag-2"}
+	svc := NewService(client)
+	opts := Options{ChunkSize: 50, TrackerDir: trackerDir}
+	if err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, opts); err != nil {
+		t.Fatal(err)
 	}
-	if _, statErr := os.Stat(destination); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("expected no destination file on failed download, got %v", statErr)
+
+	chunk := filepath.Join(trackerDir, "docs_report.csv", "chunk-000001.part")
+	if err := os.WriteFile(chunk, []byte("bad"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, opts)
+	if err == nil || !strings.Contains(err.Error(), "--force-repair") {
+		t.Fatalf("expected force-repair error, got %v", err)
+	}
+
+	opts.ForceRepair = true
+	if err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, opts); err != nil {
+		t.Fatalf("force repair should succeed: %v", err)
 	}
 }

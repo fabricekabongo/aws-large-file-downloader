@@ -32,13 +32,6 @@ type Options struct {
 	ForceRepair bool
 }
 
-type Options struct {
-	SessionName string
-	TrackerDir  string
-	ChunkSize   int64
-	ForceRepair bool
-}
-
 type chunkState struct {
 	Index    int    `json:"index"`
 	Start    int64  `json:"start"`

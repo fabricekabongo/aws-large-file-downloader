@@ -32,6 +32,13 @@ type Options struct {
 	ForceRepair bool
 }
 
+type Options struct {
+	SessionName string
+	TrackerDir  string
+	ChunkSize   int64
+	ForceRepair bool
+}
+
 type chunkState struct {
 	Index    int    `json:"index"`
 	Start    int64  `json:"start"`
@@ -57,7 +64,8 @@ type tracker struct {
 }
 
 func NewService(client Client) Service { return Service{client: client} }
-func ParseS3URI(uri string) (string, string, error) {
+
+func ParseS3URI(uri string) (string, string, error) { /* unchanged */
 	trimmed := strings.TrimSpace(uri)
 	if !strings.HasPrefix(trimmed, "s3://") {
 		return "", "", fmt.Errorf("source must start with s3://")

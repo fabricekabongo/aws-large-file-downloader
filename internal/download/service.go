@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 )
 
 type ObjectInfo struct {
@@ -20,8 +22,14 @@ type Client interface {
 	DownloadRange(ctx context.Context, bucket, key string, start, end int64, w io.Writer) error
 }
 
-type Service struct {
-	client Client
+type Service struct{ client Client }
+
+type Options struct {
+	SessionName string
+	TrackerDir  string
+	ChunkSize   int64
+	Workers     int
+	ForceRepair bool
 }
 
 type Options struct {
@@ -62,14 +70,13 @@ func ParseS3URI(uri string) (string, string, error) { /* unchanged */
 	if !strings.HasPrefix(trimmed, "s3://") {
 		return "", "", fmt.Errorf("source must start with s3://")
 	}
-	withoutScheme := strings.TrimPrefix(trimmed, "s3://")
-	parts := strings.SplitN(withoutScheme, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	ws := strings.TrimPrefix(trimmed, "s3://")
+	p := strings.SplitN(ws, "/", 2)
+	if len(p) != 2 || p[0] == "" || p[1] == "" {
 		return "", "", fmt.Errorf("source must be in the format s3://bucket/key")
 	}
-	return parts[0], parts[1], nil
+	return p[0], p[1], nil
 }
-
 func (s Service) DownloadToFile(ctx context.Context, source, destination string) error {
 	return s.DownloadToFileWithOptions(ctx, source, destination, Options{ChunkSize: 64 * 1024 * 1024, TrackerDir: ".alld"})
 }
@@ -91,6 +98,9 @@ func (s Service) DownloadToFileWithOptions(ctx context.Context, source, destinat
 	if opts.SessionName == "" {
 		opts.SessionName = strings.ReplaceAll(strings.TrimPrefix(source, "s3://"), "/", "_")
 	}
+	if opts.Workers <= 0 {
+		opts.Workers = runtime.NumCPU()
+	}
 
 	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
 		return fmt.Errorf("create destination directory: %w", err)
@@ -109,7 +119,6 @@ func (s Service) DownloadToFileWithOptions(ctx context.Context, source, destinat
 	if err != nil {
 		return fmt.Errorf("head s3 object: %w", err)
 	}
-
 	chunkDir := filepath.Join(opts.TrackerDir, opts.SessionName)
 	if err := os.MkdirAll(chunkDir, 0o755); err != nil {
 		return fmt.Errorf("create chunk dir: %w", err)
@@ -122,21 +131,9 @@ func (s Service) DownloadToFileWithOptions(ctx context.Context, source, destinat
 	if err := saveTracker(trackerPath, tr); err != nil {
 		return err
 	}
-
-	for i := range tr.Chunks {
-		c := &tr.Chunks[i]
-		if c.Status == "done" {
-			continue
-		}
-		if err := downloadChunk(ctx, s.client, bucket, key, *c); err != nil {
-			return fmt.Errorf("download chunk %d: %w", c.Index, err)
-		}
-		c.Status = "done"
-		if err := saveTracker(trackerPath, tr); err != nil {
-			return err
-		}
+	if err := downloadPendingChunks(ctx, s.client, bucket, key, trackerPath, &tr, opts.Workers); err != nil {
+		return err
 	}
-
 	if err := consolidate(destination, tr.Chunks); err != nil {
 		return err
 	}
@@ -144,16 +141,64 @@ func (s Service) DownloadToFileWithOptions(ctx context.Context, source, destinat
 	return saveTracker(trackerPath, tr)
 }
 
+func downloadPendingChunks(ctx context.Context, c Client, bucket, key, trackerPath string, tr *tracker, workers int) error {
+	jobs := make(chan int)
+	errCh := make(chan error, 1)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+		for idx := range jobs {
+			ch := tr.Chunks[idx]
+			if err := downloadChunk(ctx, c, bucket, key, ch); err != nil {
+				select {
+				case errCh <- fmt.Errorf("download chunk %d: %w", ch.Index, err):
+				default:
+				}
+				return
+			}
+			mu.Lock()
+			tr.Chunks[idx].Status = "done"
+			saveErr := saveTracker(trackerPath, *tr)
+			mu.Unlock()
+			if saveErr != nil {
+				select {
+				case errCh <- saveErr:
+				default:
+				}
+				return
+			}
+		}
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go worker()
+	}
+	for i := range tr.Chunks {
+		if tr.Chunks[i].Status != "done" {
+			jobs <- i
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
 func buildTracker(source, bucket, key, dest, chunkDir, trackerPath string, obj ObjectInfo, opts Options) tracker {
 	chunks := []chunkState{}
-	var idx int
+	idx := 0
 	for start := int64(0); start < obj.Size; start += opts.ChunkSize {
 		end := start + opts.ChunkSize - 1
 		if end >= obj.Size {
 			end = obj.Size - 1
 		}
 		expected := end - start + 1
-		chunks = append(chunks, chunkState{Index: idx, Start: start, End: end, Expected: expected, Path: filepath.Join(chunkDir, fmt.Sprintf("chunk-%06d.part", idx)), Status: "pending"})
+		chunks = append(chunks, chunkState{Index: idx, Start: start, End: end, Path: filepath.Join(chunkDir, fmt.Sprintf("chunk-%06d.part", idx)), Expected: expected, Status: "pending"})
 		idx++
 	}
 	return tracker{SessionName: opts.SessionName, Status: "in_progress", Source: source, Bucket: bucket, Key: key, Destination: dest, ObjectSize: obj.Size, ETag: obj.ETag, ChunkSize: opts.ChunkSize, TrackerPath: trackerPath, ChunkDirPath: chunkDir, Chunks: chunks}

@@ -1,6 +1,8 @@
 package cmd
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestNewRootCommand_HasRunAndDownloadSubcommands(t *testing.T) {
 	root := NewRootCommand(nil)
@@ -14,5 +16,15 @@ func TestNewRootCommand_HasRunAndDownloadSubcommands(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected %s subcommand", name)
 		}
+	}
+}
+
+func TestNewRootCommand_HasVerboseFlags(t *testing.T) {
+	root := NewRootCommand(nil)
+	if root.PersistentFlags().Lookup("verbose") == nil {
+		t.Fatal("expected --verbose flag")
+	}
+	if root.PersistentFlags().ShorthandLookup("v") == nil {
+		t.Fatal("expected -v shorthand")
 	}
 }

@@ -4,17 +4,21 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/example/aws-large-file-downloader/internal/download"
 )
 
 type fakeDownloadService struct {
 	source      string
 	destination string
+	options     download.Options
 	err         error
 }
 
-func (f *fakeDownloadService) DownloadToFile(_ context.Context, source, destination string) error {
+func (f *fakeDownloadService) DownloadToFileWithOptions(_ context.Context, source, destination string, opts download.Options) error {
 	f.source = source
 	f.destination = destination
+	f.options = opts
 	return f.err
 }
 
@@ -48,5 +52,18 @@ func TestNewDownloadCommand_PropagatesServiceErrors(t *testing.T) {
 
 	if err := cmd.Execute(); !errors.Is(err, svc.err) {
 		t.Fatalf("expected wrapped service error, got %v", err)
+	}
+}
+
+func TestNewDownloadCommand_EnablesForceRepairOption(t *testing.T) {
+	svc := &fakeDownloadService{}
+	cmd := newDownloadCommand(context.Background(), svc)
+	cmd.SetArgs([]string{"--source", "s3://docs/report.csv", "--dest", "./report.csv", "--force-repair"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if !svc.options.ForceRepair {
+		t.Fatal("expected force-repair option to be enabled")
 	}
 }

@@ -30,6 +30,21 @@ type Options struct {
 	ChunkSize   int64
 	Workers     int
 	ForceRepair bool
+	Reporter    ProgressReporter
+}
+
+type ProgressSnapshot struct {
+	Status      string
+	TotalChunks int
+	DoneChunks  int
+	Workers     int
+	ChunkSize   int64
+	BytesDone   int64
+	BytesTotal  int64
+}
+
+type ProgressReporter interface {
+	Report(ProgressSnapshot)
 }
 
 type chunkState struct {
@@ -124,17 +139,19 @@ func (s Service) DownloadToFileWithOptions(ctx context.Context, source, destinat
 	if err := saveTracker(trackerPath, tr); err != nil {
 		return err
 	}
-	if err := downloadPendingChunks(ctx, s.client, bucket, key, trackerPath, &tr, opts.Workers); err != nil {
+	reportProgress(opts.Reporter, tr, opts.Workers, "downloading")
+	if err := downloadPendingChunks(ctx, s.client, bucket, key, trackerPath, &tr, opts.Workers, opts.Reporter); err != nil {
 		return err
 	}
 	if err := consolidate(destination, tr.Chunks); err != nil {
 		return err
 	}
 	tr.Status = "completed"
+	reportProgress(opts.Reporter, tr, opts.Workers, "completed")
 	return saveTracker(trackerPath, tr)
 }
 
-func downloadPendingChunks(ctx context.Context, c Client, bucket, key, trackerPath string, tr *tracker, workers int) error {
+func downloadPendingChunks(ctx context.Context, c Client, bucket, key, trackerPath string, tr *tracker, workers int, reporter ProgressReporter) error {
 	jobs := make(chan int)
 	errCh := make(chan error, 1)
 	var mu sync.Mutex
@@ -153,6 +170,7 @@ func downloadPendingChunks(ctx context.Context, c Client, bucket, key, trackerPa
 			mu.Lock()
 			tr.Chunks[idx].Status = "done"
 			saveErr := saveTracker(trackerPath, *tr)
+			reportProgress(reporter, *tr, workers, "downloading")
 			mu.Unlock()
 			if saveErr != nil {
 				select {
@@ -180,6 +198,21 @@ func downloadPendingChunks(ctx context.Context, c Client, bucket, key, trackerPa
 	default:
 		return nil
 	}
+}
+
+func reportProgress(reporter ProgressReporter, tr tracker, workers int, status string) {
+	if reporter == nil {
+		return
+	}
+	done := 0
+	var bytesDone int64
+	for _, ch := range tr.Chunks {
+		if ch.Status == "done" {
+			done++
+			bytesDone += ch.Expected
+		}
+	}
+	reporter.Report(ProgressSnapshot{Status: status, TotalChunks: len(tr.Chunks), DoneChunks: done, Workers: workers, ChunkSize: tr.ChunkSize, BytesDone: bytesDone, BytesTotal: tr.ObjectSize})
 }
 
 func buildTracker(source, bucket, key, dest, chunkDir, trackerPath string, obj ObjectInfo, opts Options) tracker {

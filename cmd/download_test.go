@@ -67,3 +67,19 @@ func TestNewDownloadCommand_EnablesForceRepairOption(t *testing.T) {
 		t.Fatal("expected force-repair option to be enabled")
 	}
 }
+
+func TestNewDownloadCommand_PropagatesParallelOptions(t *testing.T) {
+	svc := &fakeDownloadService{}
+	cmd := newDownloadCommand(context.Background(), svc)
+	cmd.SetArgs([]string{"--source", "s3://docs/report.csv", "--dest", "./report.csv", "--workers", "8", "--chunk-size-mb", "16"})
+
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if svc.options.Workers != 8 {
+		t.Fatalf("expected workers=8, got %d", svc.options.Workers)
+	}
+	if svc.options.ChunkSize != 16*1024*1024 {
+		t.Fatalf("expected chunk size set, got %d", svc.options.ChunkSize)
+	}
+}

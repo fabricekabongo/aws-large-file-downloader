@@ -15,13 +15,18 @@ import (
 
 func NewRootCommand(ctx context.Context) *cobra.Command {
 	var logLevel string
+	var verbose bool
 	root := &cobra.Command{Use: "aws-large-file-downloader", Short: "Download large files from AWS with a guided TUI."}
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level: debug|info|warn|error")
+	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose logging (equivalent to --log-level debug)")
 
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run interactive download workflow",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if verbose {
+				logLevel = "debug"
+			}
 			level := parseLevel(logLevel)
 			logger := logging.NewLogger(os.Stdout, level)
 			shutdown, err := telemetry.Setup(ctx, "aws-large-file-downloader")

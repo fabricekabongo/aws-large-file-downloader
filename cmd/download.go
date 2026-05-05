@@ -11,12 +11,13 @@ import (
 )
 
 type downloadService interface {
-	DownloadToFile(ctx context.Context, source, destination string) error
+	DownloadToFileWithOptions(ctx context.Context, source, destination string, opts download.Options) error
 }
 
 func newDownloadCommand(ctx context.Context, service downloadService) *cobra.Command {
 	var source string
 	var destination string
+	var forceRepair bool
 
 	c := &cobra.Command{
 		Use:          "download",
@@ -26,17 +27,20 @@ func newDownloadCommand(ctx context.Context, service downloadService) *cobra.Com
 			if source == "" || destination == "" {
 				return fmt.Errorf("both --source and --dest are required")
 			}
-			return service.DownloadToFile(ctx, source, destination)
+			opts := download.Options{ForceRepair: forceRepair}
+			return service.DownloadToFileWithOptions(ctx, source, destination, opts)
 		},
 	}
 	c.Flags().StringVar(&source, "source", "", "S3 URI of file to download (s3://bucket/key)")
 	c.Flags().StringVar(&destination, "dest", "", "Local destination path")
+	c.Flags().BoolVar(&forceRepair, "force-repair", false, "Delete invalid chunk files and redownload them")
 	return c
 }
 
 func defaultDownloadCommand(ctx context.Context) *cobra.Command {
 	var source string
 	var destination string
+	var forceRepair bool
 
 	c := &cobra.Command{
 		Use:          "download",
@@ -51,10 +55,12 @@ func defaultDownloadCommand(ctx context.Context) *cobra.Command {
 				return err
 			}
 			svc := download.NewService(client)
-			return svc.DownloadToFile(cmd.Context(), source, destination)
+			opts := download.Options{ForceRepair: forceRepair}
+			return svc.DownloadToFileWithOptions(cmd.Context(), source, destination, opts)
 		},
 	}
 	c.Flags().StringVar(&source, "source", "", "S3 URI of file to download (s3://bucket/key)")
 	c.Flags().StringVar(&destination, "dest", "", "Local destination path")
+	c.Flags().BoolVar(&forceRepair, "force-repair", false, "Delete invalid chunk files and redownload them")
 	return c
 }

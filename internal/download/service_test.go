@@ -26,6 +26,17 @@ type fakeClient struct {
 	maxConcurrent int
 }
 
+type captureReporter struct {
+	mu        sync.Mutex
+	snapshots []ProgressSnapshot
+}
+
+func (c *captureReporter) Report(s ProgressSnapshot) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.snapshots = append(c.snapshots, s)
+}
+
 func (f *fakeClient) HeadObject(_ context.Context, bucket, key string) (ObjectInfo, error) {
 	f.bucket = bucket
 	f.key = key
@@ -140,5 +151,26 @@ func TestDownloadToFile_ResumeValidatesAndRepairsWhenForced(t *testing.T) {
 	opts.ForceRepair = true
 	if err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, opts); err != nil {
 		t.Fatalf("force repair should succeed: %v", err)
+	}
+}
+
+func TestDownloadToFile_ReportsProgress(t *testing.T) {
+	tempDir := t.TempDir()
+	destination := filepath.Join(tempDir, "report.csv")
+	body := strings.Repeat("z", 128)
+	client := &fakeClient{body: body, size: int64(len(body)), etag: "etag-z"}
+	reporter := &captureReporter{}
+	svc := NewService(client)
+
+	err := svc.DownloadToFileWithOptions(context.Background(), "s3://docs/report.csv", destination, Options{ChunkSize: 32, Workers: 2, TrackerDir: filepath.Join(tempDir, ".alld"), Reporter: reporter})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(reporter.snapshots) == 0 {
+		t.Fatal("expected progress snapshots")
+	}
+	last := reporter.snapshots[len(reporter.snapshots)-1]
+	if last.Status != "completed" || last.DoneChunks != last.TotalChunks {
+		t.Fatalf("expected completed snapshot, got %+v", last)
 	}
 }

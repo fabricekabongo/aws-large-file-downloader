@@ -55,6 +55,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	return fmt.Sprintf("Download target: %s\n\n%s\n\nPress Enter to start, q to quit.\n",
-		m.Input.View(), m.Progress.ViewAs(m.Percent))
+	return fmt.Sprintf("%s\n%s\n\nDownload target: %s\n\nPress Enter to start, q to quit.\n",
+		"Progress:", m.Progress.ViewAs(m.Percent), m.Input.View())
 }

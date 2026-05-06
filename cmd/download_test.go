@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/example/aws-large-file-downloader/internal/download"
@@ -13,6 +14,19 @@ type fakeDownloadService struct {
 	destination string
 	options     download.Options
 	err         error
+}
+
+func TestFormatProgressMessage_IsHumanReadable(t *testing.T) {
+	msg := formatProgressMessage(download.ProgressSnapshot{Status: "downloading", DoneChunks: 2, TotalChunks: 8, BytesDone: 256, BytesTotal: 1024, Workers: 4}, 25.0)
+	if strings.Contains(msg, "\"") || strings.Contains(msg, "{") {
+		t.Fatalf("expected plain text message, got %q", msg)
+	}
+	if !strings.Contains(msg, "25.0% complete") {
+		t.Fatalf("expected percent in message, got %q", msg)
+	}
+	if !strings.Contains(msg, "2/8 chunks") {
+		t.Fatalf("expected chunk progress in message, got %q", msg)
+	}
 }
 
 func (f *fakeDownloadService) DownloadToFileWithOptions(_ context.Context, source, destination string, opts download.Options) error {

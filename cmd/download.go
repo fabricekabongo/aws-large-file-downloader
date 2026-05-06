@@ -23,15 +23,13 @@ func (r logProgressReporter) Report(s download.ProgressSnapshot) {
 	if s.BytesTotal > 0 {
 		pct = (float64(s.BytesDone) / float64(s.BytesTotal)) * 100
 	}
-	r.logger.Info("download status",
-		slog.String("status", s.Status),
-		slog.Int("chunks_done", s.DoneChunks),
-		slog.Int("chunks_total", s.TotalChunks),
-		slog.Int("workers", s.Workers),
-		slog.Int64("chunk_size_bytes", s.ChunkSize),
-		slog.Int64("bytes_done", s.BytesDone),
-		slog.Int64("bytes_total", s.BytesTotal),
-		slog.Float64("percent", pct),
+	r.logger.Info(formatProgressMessage(s, pct))
+}
+
+func formatProgressMessage(s download.ProgressSnapshot, pct float64) string {
+	return fmt.Sprintf(
+		"Download %s: %.1f%% complete (%d/%d chunks, %d/%d bytes, workers: %d)",
+		s.Status, pct, s.DoneChunks, s.TotalChunks, s.BytesDone, s.BytesTotal, s.Workers,
 	)
 }
 
